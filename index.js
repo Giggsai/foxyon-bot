@@ -16,13 +16,9 @@ function loadDB() {
   const defaultDB = {
     users: {},
     messages: [],
-    summaries: {},
     banned: [],
     maintenance: false,
-    stats: {
-      totalMessages: 0,
-      startedAt: now(),
-    },
+    stats: { totalMessages: 0, startedAt: now() },
   };
 
   if (!fs.existsSync(DB_FILE)) {
@@ -35,13 +31,9 @@ function loadDB() {
 
     db.users ||= {};
     db.messages ||= [];
-    db.summaries ||= {};
     db.banned ||= [];
     db.maintenance ||= false;
-    db.stats ||= {
-      totalMessages: db.messages.length || 0,
-      startedAt: now(),
-    };
+    db.stats ||= { totalMessages: db.messages.length || 0, startedAt: now() };
 
     fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
     return db;
@@ -53,11 +45,6 @@ function loadDB() {
 
 function saveDB(db) {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-}
-
-function isBanned(userId) {
-  const db = loadDB();
-  return db.banned.includes(String(userId));
 }
 
 function saveMessage(userId, role, content) {
@@ -73,7 +60,6 @@ function saveMessage(userId, role, content) {
   db.stats.totalMessages = (db.stats.totalMessages || 0) + 1;
 
   const userMsgs = db.messages.filter((m) => m.userId === String(userId));
-
   if (userMsgs.length > 50) {
     const removeCount = userMsgs.length - 50;
     let removed = 0;
@@ -106,24 +92,13 @@ function detectMode(text) {
   const t = text.toLowerCase().trim();
 
   if (t === "p") return "ping";
+  if (/ganti topik|reset topik|hapus konteks|lupain dulu/.test(t)) return "reset";
 
-  if (/ganti topik|reset topik|hapus konteks|lupain dulu/.test(t)) {
-    return "reset";
-  }
-
-  if (
-    /code|kode|coding|error|bug|fix|debug|function|node|express|html|css|python|javascript|api|database|script/.test(
-      t
-    )
-  ) {
+  if (/code|kode|coding|error|bug|fix|debug|function|node|express|html|css|python|javascript|api|database|script/.test(t)) {
     return "coding";
   }
 
-  if (
-    /jelasin|materi|tugas|kuliah|sekolah|rumus|belajar|ringkas|rangkuman|contoh soal/.test(
-      t
-    )
-  ) {
+  if (/jelasin|materi|tugas|kuliah|sekolah|rumus|belajar|ringkas|rangkuman|contoh soal/.test(t)) {
     return "study";
   }
 
@@ -135,28 +110,16 @@ function detectMode(text) {
 function detectCodeLang(text) {
   const t = text.toLowerCase();
 
-  if (t.includes("python") || t.includes("def ") || t.includes("print(")) {
-    return "python";
-  }
-
-  if (t.includes("<html") || t.includes("</div>") || t.includes("<body")) {
-    return "html";
-  }
-
-  if (t.includes("css") || (t.includes("{") && t.includes(":") && t.includes(";"))) {
-    return "css";
-  }
-
-  if (t.includes("{") && t.includes("}") && t.includes(":") && t.includes('"')) {
-    return "json";
-  }
+  if (t.includes("python") || t.includes("def ") || t.includes("print(")) return "python";
+  if (t.includes("<html") || t.includes("</div>") || t.includes("<body")) return "html";
+  if (t.includes("css") || (t.includes("{") && t.includes(":") && t.includes(";"))) return "css";
+  if (t.includes("{") && t.includes("}") && t.includes(":") && t.includes('"')) return "json";
 
   return "javascript";
 }
 
 function formatCode(text, userText = "") {
   if (!text) return "";
-
   if (text.includes("```")) return text;
 
   const combined = `${userText}\n${text}`;
@@ -219,48 +182,88 @@ aturan:
 kalau user minta coding:
 - wajib kasih kode dalam Markdown code block
 - kasih penjelasan singkat
-- jangan taruh kode tanpa code block
 
 format:
 \`\`\`javascript
 kode disini
 \`\`\`
-
-kalau Python:
-\`\`\`python
-kode disini
-\`\`\`
-
-kalau HTML:
-\`\`\`html
-kode disini
-\`\`\`
 `;
+}
+
+async function askGroq(messages) {
+  const res = await axios.post(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      model: "llama-3.1-8b-instant",
+      messages,
+      temperature: 0.75,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 60000,
+    }
+  );
+
+  return res.data.choices?.[0]?.message?.content || "";
+}
+
+async function askGeminiText(messages) {
+  const text = messages.map((m) => `${m.role}: ${m.content}`).join("\n");
+
+  const res = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    {
+      contents: [{ parts: [{ text }] }],
+    },
+    { timeout: 60000 }
+  );
+
+  return res.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
 }
 
 async function askAI(messages) {
   try {
-    const res = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: "llama-3.1-8b-instant",
-        messages,
-        temperature: 0.75,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 60000,
-      }
-    );
-
-    return res.data.choices?.[0]?.message?.content || "";
+    const reply = await askGroq(messages);
+    if (reply) return reply;
   } catch (err) {
     console.log("Groq error:", err.response?.data || err.message);
-    return "lagi error, coba lagi bentar";
   }
+
+  try {
+    const reply = await askGeminiText(messages);
+    if (reply) return reply;
+  } catch (err) {
+    console.log("Gemini text error:", err.response?.data || err.message);
+  }
+
+  return "lagi error, coba lagi bentar";
+}
+
+async function askVision(base64Image, prompt) {
+  const res = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    {
+      contents: [
+        {
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: base64Image,
+              },
+            },
+          ],
+        },
+      ],
+    },
+    { timeout: 60000 }
+  );
+
+  return res.data.candidates?.[0]?.content?.parts?.[0]?.text || "gagal baca gambar";
 }
 
 function resetUserMemory(userId) {
@@ -272,10 +275,6 @@ function resetUserMemory(userId) {
 async function processMessage(ctx, text) {
   const userId = ctx.from.id;
   const mode = detectMode(text);
-
-  if (isBanned(userId)) {
-    return ctx.reply("lu dibatasi aksesnya");
-  }
 
   if (mode === "ping") {
     const responses = [
@@ -307,10 +306,7 @@ async function processMessage(ctx, text) {
     const history = getHistory(userId);
 
     const messages = [
-      {
-        role: "system",
-        content: buildSystem(mode),
-      },
+      { role: "system", content: buildSystem(mode) },
       ...history,
     ];
 
@@ -320,8 +316,62 @@ async function processMessage(ctx, text) {
 
     await safeReply(ctx, reply, text);
   } catch (err) {
-    console.log("Bot error:", err.message);
+    console.log("Bot error:", err.response?.data || err.message);
     await ctx.reply("error, ulang lagi");
+  } finally {
+    activeUsers.delete(userId);
+  }
+}
+
+async function processPhoto(ctx) {
+  const userId = ctx.from.id;
+
+  if (activeUsers.has(userId)) {
+    return ctx.reply("tunggu, lagi gue proses yang tadi");
+  }
+
+  activeUsers.add(userId);
+
+  try {
+    await ctx.sendChatAction("typing");
+
+    const caption = ctx.message.caption || "";
+    const photo = ctx.message.photo[ctx.message.photo.length - 1];
+
+    const file = await ctx.telegram.getFile(photo.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+
+    const img = await axios.get(fileUrl, {
+      responseType: "arraybuffer",
+      timeout: 60000,
+    });
+
+    const base64 = Buffer.from(img.data).toString("base64");
+
+    await ctx.reply("bentar, lagi gue baca gambarnya");
+
+    const prompt = `
+Jelaskan isi gambar ini pakai bahasa Indonesia santai.
+Pakai gaya gue-lu, tapi tetap jelas.
+
+Kalau gambar berisi:
+- screenshot kode: jelaskan error/isi kodenya
+- soal sekolah/kuliah: bantu jelaskan cara ngerjainnya
+- teks: baca dan ringkas
+- gambar biasa: jelaskan objek/kejadian di gambar
+
+Caption user: ${caption || "tidak ada caption"}
+`;
+
+    const reply = await askVision(base64, prompt);
+
+    saveMessage(userId, "user", `[gambar] ${caption}`);
+    saveMessage(userId, "assistant", reply);
+
+    await safeReply(ctx, reply, caption);
+  } catch (err) {
+    console.log("Vision error:", err.response?.data || err.message);
+    await ctx.reply("gagal baca gambar, coba kirim ulang");
   } finally {
     activeUsers.delete(userId);
   }
@@ -336,8 +386,7 @@ bot.on("text", async (ctx) => {
 });
 
 bot.on("photo", async (ctx) => {
-  const caption = ctx.message.caption || "tanpa caption";
-  await processMessage(ctx, "user ngirim gambar. caption: " + caption);
+  await processPhoto(ctx);
 });
 
 bot.on("document", async (ctx) => {
@@ -348,4 +397,4 @@ bot.on("document", async (ctx) => {
 
 bot.launch();
 
-console.log("bot jalan aman");
+console.log("bot jalan aman + vision aktif");
